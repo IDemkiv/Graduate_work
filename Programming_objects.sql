@@ -1,31 +1,36 @@
 /**Developing all the necessary programming objects **/
 
-/**Creating function that returns the full age of person **/
-create function dbo.getFullAge (@BirthDate date)
+/**Creating function that returns the full working years of the person **/
+create function demkiv.getFullWorkingYears (@HireDate date)
 	returns int
 	as begin
-			declare @CTRFullAge as int;
-				set @CTRFullAge = datediff(year, @BirthDate, getdate()) - case when 100 * month(getdate()) + day(getdate())
-< 100 * month(@BirthDate) + day(@BirthDate)
+			declare @CTRFullWorkingYears as int;
+				set @CTRFullWorkingYears = datediff(year, @HireDate, getdate()) - case when 100 * month(getdate()) + day(getdate())
+< 100 * month(@HireDate) + day(@HireDate)
 then 1 else 0 end
-			return @CTRFullAge;
+			return @CTRFullWorkingYears;
 
        end;
 
-select dbo.getFullAge('1987-11-07')
+select demkiv.getFullWorkingYears('1987-11-07')
 
 /**Creating function that returns age of the most experienced employee on the selected work position **/
-create function dbo.getEmp (@JobTitle nchar(30))
-	returns int
+create function demkiv.getEmp (@JobTitle nchar(30))
+	returns bigint
 	as begin
-			declare @CTREmp as int;
-				set @CTREmp = (select top 1 max(datediff(year, e1.HireDate, getdate())) as WorkingYears 
+			declare @CTREmp as bigint;
+				set @CTREmp = (select t2.EmployeeId 
+				                        from 
+				                       (select top 1 max(datediff(year, e1.HireDate, getdate())) as WorkingYears ,
+				                        e1.EmployeeId
 										from [demkiv].[EMPLOYEES] as e1 
-										where e1.JobTitle = @JobTitle)
-			return @CTREmp;
+										where e1.JobTitle = @JobTitle 
+										group by e1.EmployeeId
+										order by WorkingYears desc) as t2)
+			return @CTREmp
 
        end;
-select dbo.getEmp('Civil Engineer') 
+select demkiv.getEmp('Civil Engineer') 
 
 
 
@@ -83,6 +88,7 @@ create procedure demkiv.CREATE_NEW_ORDER
 		 where t1.VendorID = @VENDOR_ID
 		   and t1.ProductId = @PRODUCT_ID
 		   and isnull(@QTY, 0) > 0
+
 		end try 
 		begin catch
 		rollback transaction;
@@ -92,10 +98,68 @@ create procedure demkiv.CREATE_NEW_ORDER
 	   end ;
 
 
-
 execute demkiv.CREATE_NEW_ORDER 26, 4,7,9, 1900, 154;
 
+-- creating view ;
+create view [demkiv].[vwEmployees] 
+as 
+ with t5 as ( select --* 
+				old.JobTitle,
+				demkiv.getFullWorkingYears(old.[HireDate]) as WorkYearsMostExp,
+				sum(isnull(t4.TotalSum, 0)) as TotSum,
+				count(t4.OrderID) as CountOrders
+				from (select rank() over (partition by t1.JobTitle ORDER BY t1.HireDate asc) as rn,
+					t1.JobTitle,
+					t1.EmployeeId,
+					t1.PersonId,
+					t1.HireDate
+					from [demkiv].[EMPLOYEES] as t1
+					) old 
+							
+										    join [demkiv].[PERSONS] as t2 on t2.[PersonId] = old.[PersonId]
+									left	join [demkiv].[ORDERS] as t3 on t3.PersonId = t2.PersonId
+									left	join [demkiv].[ORDERDETAILS] as t4 on t4.OrderID = t3.OrderID
 
+										where old.rn = 1
+										group by old.JobTitle, old.HireDate
+			),
 
+	 t6 as (
+	 select t1.[EmployeeId], 
+	       t1.[JobTitle],
+		   upper(concat(trim(t2.[Name]), N' ', trim(t2.[Surname]), N' ', trim(t2.[Patronymic]))) as FullName,
+		   demkiv.getFullWorkingYears(t1.[HireDate]) as FullWorkingYear,
+		   count(t3.[OrderID]) as OrdersCount,
+		   sum(isnull(t4.[TotalSum],0)) as MoneySum
+from [demkiv].[EMPLOYEES] as t1
+join [demkiv].[PERSONS] as t2 on t2.[PersonId] = t1.[PersonId]
+left join [demkiv].[ORDERS] as t3 on t3.PersonId = t2.PersonId
+left join [demkiv].[ORDERDETAILS] as t4 on t4.OrderID = t3.OrderID
+group by t1.[EmployeeId], 
+	     t1.[JobTitle],
+		 t2.[Name],
+		 t2.[Surname],
+		 t2.[Patronymic],
+		 t1.[HireDate])
 
+	select t6.EmployeeId,
+	t6.JobTitle,
+	t6.FullName,
+	t6.FullWorkingYear,
+	t5.WorkYearsMostExp,
+	t5.WorkYearsMostExp - t6.FullWorkingYear as Yeardiff,
+	t6.OrdersCount,
+	t5.CountOrders,
+	t6.OrdersCount - t5.CountOrders  as OrdersDiff,
+	t6.MoneySum,
+	t5.TotSum,
+	t6.MoneySum - t5.TotSum as MoneyDiff
+
+	from t6
 	
+join t5 on t5.JobTitle = t6.JobTitle
+order by t6.FullWorkingYear desc
+;
+
+
+
